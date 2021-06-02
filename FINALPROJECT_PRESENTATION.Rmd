@@ -1,0 +1,590 @@
+---
+title: "RISK MANAGEMENT PROJECT"
+author: "GROUP3:Neha Sharma, Betty Guo, Hongxi Wan, Nishant Agrawal and Monal Nasa"
+date: "4/13/2021"
+output: ioslides_presentation
+---
+
+```{r, echo=FALSE}
+# setwd("C:/Users/mojmc/Desktop/R 654")
+library(RTL)
+library(tidyr)
+library(tidyverse)
+library(tidyquant)
+library(ggplot2)
+library(timetk)
+library(PerformanceAnalytics)
+library(fOptions)
+library(scales)
+```
+
+
+```{r,echo = FALSE}
+##FUTURES-------------------------------------------------------------------
+
+fut_fulljul<- RTL::getPrice(feed="CME_NymexFutures_EOD",contract="@CL21N",
+                    from="2021-03-23",
+                    iuser="morningstar.dscf@ualberta.ca",
+              ipassword = "3P#6%bWv7W")
+futjul<- fut_fulljul[1,2]
+fut.date <- as.Date("2021-03-23")
+
+fut_fullaug<- RTL::getPrice(feed="CME_NymexFutures_EOD",contract="@CL21Q",
+                    from="2021-03-23",
+                    iuser="morningstar.dscf@ualberta.ca",
+              ipassword = "3P#6%bWv7W")
+futaug<- fut_fullaug[1,2]
+
+fut<-  futjul*(16/(16+6))+ (6/22)*futaug
+
+fut<- fut  %>% dplyr::transmute(fut=CL21N) %>% as.numeric()
+ 
+
+#OPTIONS-------------------------------------------------------------------
+
+optjul<-RTL::getPrice(feed="CME_NymexOptions_EOD",
+              contract="@LO21NP5700",
+              from = "2021-03-23",
+            iuser="morningstar.dscf@ualberta.ca",
+              ipassword = "3P#6%bWv7W")
+colnames(optjul)[grep("LO21NP5700", colnames(optjul))] <-"optpricejul"
+Pjul<- optjul %>% dplyr::filter(date=="2021-03-23") %>% 
+  dplyr::transmute(Pjul=optpricejul) %>% as.numeric()
+
+optaug<-RTL::getPrice(feed="CME_NymexOptions_EOD",
+              contract="@LO21QP5700",
+              from = "2021-03-23",
+            iuser="morningstar.dscf@ualberta.ca",
+              ipassword = "3P#6%bWv7W")
+colnames(optaug)[grep("LO21QP5700", colnames(optaug))] <-"optpriceaug"
+Paug<- optaug %>% dplyr::filter(date=="2021-03-23") %>% 
+  dplyr::transmute(Paug=optpriceaug) %>% as.numeric()
+
+price<-Pjul*(16/26)+ Paug*(10/26)
+
+#Time to expiry calculation---------------------------------------------------
+optexpiry<- as.Date("2021-06-30")
+T2expiry<- as.numeric(optexpiry-fut.date)/365#in years
+
+```
+
+```{r, echo=FALSE}
+# Western Canadian Select----------------------------------------------------
+WCWN<- RTL::getPrice(feed="CME_STLCPC_Futures",contract="WCW2021N",
+                    from="2021-03-23",
+                    iuser="morningstar.dscf@ualberta.ca",
+              ipassword = "3P#6%bWv7W")
+WCW_23N <- as.numeric(WCWN[1,2])
+WCWQ<- RTL::getPrice(feed="CME_STLCPC_Futures",contract="WCW2021Q",
+                    from="2021-03-23",
+                    iuser="morningstar.dscf@ualberta.ca",
+              ipassword = "3P#6%bWv7W")
+WCW_23Q <- as.numeric(WCWQ[1,2])
+WCW_23 <- (WCW_23N*16/26)+ (WCW_23Q*10/26)
+
+
+```
+
+
+```{r,echo=FALSE}
+#CC5 contract----------------------------------------------------------------
+CC5N<- RTL::getPrice(feed="CME_STLCPC_Futures",contract="CC52021N",
+                    from="2021-03-23",
+                    iuser="morningstar.dscf@ualberta.ca",
+              ipassword = "3P#6%bWv7W")
+CC5_23N <- as.numeric(CC5N[1,2])
+CC5Q<- RTL::getPrice(feed="CME_STLCPC_Futures",contract="CC52021Q",
+                    from="2021-03-23",
+                    iuser="morningstar.dscf@ualberta.ca",
+              ipassword = "3P#6%bWv7W")
+CC5_23Q <- as.numeric(CC5Q[1,2])
+
+
+CC5_23 <- (CC5_23N*16/26)+ (CC5_23Q*10/26)
+
+
+```
+## OUR NETBACKS 
+We have extracted WCW and CC5 and calculated the IV as on 23rd March 2021:
+
+- WTI price for the month of June is $57.57
+
+- THE WCS differential for the month of June is  -10.5576923076923
+
+- THE CC5 differential for the month of June is  -1.38846153846154
+
+- The IV is 41%
+
+```{r,echo=FALSE}
+#IV-------------------------------------------------------------------------
+r <- 0.0025
+#paste("Risk free rate is:", percent(r)) # Set USD IR at 0.25%
+
+fun <-
+   function(x) {
+    Black76Option(
+    TypeFlag = "p",
+      FT = fut,
+      X = 57,
+      Time = T2expiry,
+      r = r,
+      sigma = x
+    )@price - price
+  }
+implied.vol <- stats::uniroot(fun, c(0.01, 0.8), tol = 0.001)$root
+```
+## WTI Futures Curve
+
+
+
+
+
+
+
+
+
+
+```{r,message=FALSE, warning=FALSE,echo=FALSE}
+#To explain why weighted average prices are chosen: June contract has 16 trading days belonging to july fut and 6 days belonging to aug fut
+
+date = "2021-03-23"
+fig.title = paste("Swap Pricing: WTI Futures Curve as of", date)
+feeds = dplyr::tibble(
+  feed = c(
+    "Crb_Futures_Price_Volume_And_Open_Interest",
+    "CME_NymexFutures_EOD_continuous"
+  ),
+  ticker = c("CL", "CL_001_Month")
+)
+x <-
+  RTL::swapInfo(
+    date = date,
+    feeds = feeds,
+    contract = "cmewti",
+    exchange = "nymex",
+    iuser="morningstar.dscf@ualberta.ca",
+              ipassword = "3P#6%bWv7W",
+    output = "all"
+  )
+curve <- x[[1]]
+x[[2]]
+suppressMessages(library(dplyr, warn.conflict = FALSE, quietly = TRUE))
+
+```
+
+
+
+```{r,echo=FALSE}
+#STIMULATIONS WTI---------------------------------------------------------------
+set.seed(9876)
+S0 <-fut
+drift <-  r
+sigma <- implied.vol
+T <-  T2expiry
+periods <-  round(252 * T, 0)
+simulations <-  10000
+dt <-  T / periods
+
+
+m <- replicate(simulations, 
+               RTL::simGBM(S0,drift,sigma,T2M = T,dt))
+
+m <- as_tibble(m) %>% 
+  dplyr::mutate(date = seq(from = Sys.Date(), by = "day", length.out = periods)) 
+colnames(m) <- c(paste(c("sim"),c(1:simulations),sep = ""),"date")
+
+gbm <- m[nrow(m),] %>% 
+  tidyr::pivot_longer(-date,"series","value")
+
+```
+
+## NCF cash flows before the hedging 
+
+
+
+
+```{r,echo=FALSE}
+#NCF CALC AND GRAPH----------------------------------------------------------------------
+gbm<-gbm %>% mutate(ncfbefore=(gbm$value + WCW_23) - (gbm$value+CC5_23)*.3 - 10) 
+
+gbm %>% ggplot(aes(x = ncfbefore)) + 
+geom_histogram(aes(y = stat(count / sum(count))),bins = 100,col="blue",fill="blue")+
+  labs(title = "Density Histogram of NCF Terminal Value before hedging", 
+       caption = "",
+       y = "Density", x = "")+
+       geom_vline(xintercept=mean(gbm$ncfbefore), color="red")#+xlim(-20,20 )
+```
+- NCF under $12 per barrel is 16.65 % and under 0 is 0.05%
+
+
+## NCF vs WTI Prices
+
+
+```{r,echo=FALSE,warning=FALSE}
+#WTI vs NCF GRAPH-------------------------------------------------------------
+ggplot() + 
+geom_line(data = gbm, aes(x = gbm$value, y = gbm$ncfbefore), color = "blue")+
+  labs(
+    title = "NCF vs WTI Prices",
+    y = "NCF ($/bbl)",
+    x = "WTI ($/bbl)"
+  )
+
+
+```
+
+
+
+
+```{r,echo=FALSE}
+## PERCENTAGE-----------------
+percentage_values <- subset(gbm$ncfbefore, gbm$ncfbefore < 0)
+#length(percentage_values)/10000*100
+percentage_values_12 <- subset(gbm$ncfbefore, gbm$ncfbefore < 12)
+#length(percentage_values_12)/10000*100
+
+
+```
+
+
+
+
+
+
+##  DIFFERENT HEDGING STRATEGIES 
+- Swaps
+- Options
+- Futures
+
+AND OUR PROPOSED STRATEGY
+
+
+
+
+
+
+
+## 1) Using Swaps at $57.57
+
+
+```{r,echo=FALSE}
+# Hedging through Commodity Swap:
+#SWAP NCF CALC----------------------------------------------------------------
+
+m_swap <- as_tibble(m) %>% 
+  dplyr::mutate(date = seq(from = Sys.Date(), by = "day", length.out = periods)) 
+colnames(m_swap) <- c(paste(c("sim"),c(1:simulations),sep = ""),"date")
+
+gbm_swap <- m_swap[nrow(m_swap),] %>% 
+  tidyr::pivot_longer(-date,"series","value")
+
+gbm_swap$value<- 0*(gbm_swap$value +  WCW_23 - (gbm_swap$value+CC5_23)*.3 - 10)+
+                1*(fut +  WCW_23 - (gbm_swap$value+CC5_23)*.3 - 10) 
+
+gbm_swap %>% ggplot(aes(x = value)) + 
+geom_histogram(aes(y = stat(count / sum(count))),bins = 100,col="blue",fill="blue")+
+  labs(title = "Density Histogram of NCF Terminal Value with Hedging with Swap", 
+       caption = "",
+       subtitle="NCF under $12 using Swaps is : 2.94 %",
+       y = "Density", x = "")+
+       geom_vline(xintercept=mean(gbm_swap$value), color="red")#+xlim(-20,20 )
+```
+```{r,echo=FALSE}
+# SWAP % BELOW 0 AND 12/barrel CALC-------------------------------------------
+percentage_values_swap <- subset(gbm_swap$value, gbm_swap$value < 0)
+percentage_values_12_swap <- subset(gbm_swap$value, gbm_swap$value < 12)
+#length(percentage_values_12_swap)/10000*100
+```
+
+
+
+## 2) Using only Put Option 
+- Put Option Premium = $0.34/barrel
+```{r,echo=FALSE}
+# HEDGING WITH PUT @ 36
+
+## PUT PRICE-------------------------------------------------------------------
+opt_put36<-RTL::getPrice(feed="CME_NymexOptions_EOD",
+              contract="@LO21NP3600",
+              from = "2021-03-23",
+            iuser="morningstar.dscf@ualberta.ca",
+              ipassword = "3P#6%bWv7W")
+colnames(opt_put36)[grep("LO21NP3600", colnames(opt_put36))] <-"optprice36"
+price_opt_36<- opt_put36 %>% dplyr::filter(date=="2021-03-23") %>% 
+  dplyr::transmute(price=optprice36) %>% as.numeric()
+
+  
+```
+
+
+```{r,message=FALSE, warning=FALSE,echo=FALSE}
+# PUT NCF AND GRAPH-------------------------------------------------------------------
+putreturn <-ifelse((36-gbm$value)>=0,36-gbm$value,0)
+gbm<-gbm %>% mutate(ncfhput=(gbm$value + WCW_23) - (gbm$value+CC5_23)*.3 - 10       -price_opt_36*exp(r*T2expiry) + putreturn)
+
+gbm %>% ggplot(aes(x = ncfhput)) + 
+geom_histogram(aes(y = stat(count / sum(count))),bins = 100,col="blue",fill="blue")+
+  labs(title = "Density Histogram of NCF Terminal Value using long Put at $36 strike", 
+       caption = "",subtitle="NCF under $12 using put option is : 17.8 %",
+      
+       y = "Density", x = "")+
+      geom_vline(xintercept=mean(gbm$ncfhput), color="red")+xlim(-10,90 )
+suppressMessages(library(dplyr, warn.conflict = FALSE, quietly = TRUE))
+
+
+```
+
+```{r,echo=FALSE}
+#PUT % BELOW 0 AND 12/barrel-----------------------------------------------------
+percentage_values_put <- subset(gbm$ncfhput, gbm$ncfhput < 0)
+percentage_values_12_put <- subset(gbm$ncfhput, gbm$ncfhput < 12)
+length(percentage_values_12_put)/10000*100
+
+
+```
+
+## 3) Using only Call Option
+- Call Option Premium: $0.35/barrel
+```{r,message=FALSE, warning=FALSE,echo=FALSE}
+# SHORT A CALL @78
+opt_call<-RTL::getPrice(feed="CME_NymexOptions_EOD",
+              contract="@LO21NC7800",
+              from = "2021-03-23",
+            iuser="morningstar.dscf@ualberta.ca",
+              ipassword = "3P#6%bWv7W")
+colnames(opt_call)[grep("LO21NC7800", colnames(opt_call))] <-"optprice"
+price_opt_call<- opt_call %>% dplyr::filter(date=="2021-03-23") %>% 
+  dplyr::transmute(price=optprice) %>% as.numeric()
+
+callreturn2 <-ifelse((gbm$value-78)>=0,gbm$value-78,0)
+
+gbm<-gbm %>% mutate(ncfcall_Put=((gbm$value + WCW_23) - (gbm$value+CC5_23)*.3 - 10  + +price_opt_call*exp(r*T2expiry)-callreturn2)) 
+
+# CALL GRAPH--------------------------------------------------------------
+
+gbm %>% ggplot(aes(x = ncfcall_Put)) + 
+geom_histogram(aes(y = stat(count / sum(count))),bins = 100,col="blue",fill="blue")+
+  labs(title = "Density Histogram of NCF Terminal Value using short Call at $78 strike", 
+       caption = "",
+       subtitle="NCF under $12 using short call at $78  is : 15.42 %",
+      
+       y = "Density", x = "")+
+      geom_vline(xintercept=mean(gbm$ncfcall_Put), color="red")+xlim(-10,90 )
+suppressMessages(library(dplyr, warn.conflict = FALSE, quietly = TRUE))
+```
+```{r}
+# CALL PERCENTAGE--------------------------------------------------------
+percentage_values_12_c <- subset(gbm$ncfcall_Put, gbm$ncfcall_Put < 12)
+length(percentage_values_12_c)/10000*100
+
+```
+
+
+```{r,message=FALSE, warning=FALSE,echo=FALSE}
+# WEIGHING THE COST AND BENIFIT OF ALL THE STRATEGIES, THE STRATEGY WE SUGGEST 
+#CONCLUSIVELY IS A MIXED STRATEGY INCLUDING COLLARS, SWAPS AND UNHEDGED PART OF PRODUCTION
+
+#We are looking at the NCF with 48% collars and 32% swaps and 20% unhedged 
+#with put strike at $36 and call strike at $78
+
+gbm<-gbm %>% mutate(ncfcall_hedgestrat=
+                      (0.48*((gbm$value + WCW_23) - (gbm$value+CC5_23)*.3 - 10 -price_opt_36 + putreturn+price_opt_call-callreturn2))
+                       +(0.32*(fut +  WCW_23 - (gbm$value+CC5_23)*.3 - 10))
+                    + (0.20*((gbm$value + WCW_23) -(gbm$value+CC5_23)*.3 - 10)))
+
+#  %s-------------------------------------------------------
+percentage_values_12_h <- subset(gbm$ncfcall_hedgestrat, gbm$ncfcall_hedgestrat < 12)
+length(percentage_values_12_h)/10000*100
+
+```
+## SUGGESTED STRATEGY:
+- 48% collars (long put @36 and short call @78) and 32% swaps and 20% unhedged.
+
+- NCF under $12 using our hedging strategy is : 0.31 %
+```{r,message=FALSE, warning=FALSE,echo=FALSE}
+#SUGGESTED STRATEGY GRAPH----------------------------------------------------
+
+gbm %>% ggplot(aes(x = ncfcall_hedgestrat)) + 
+geom_histogram(aes(y = stat(count / sum(count))),bins = 100,col="blue",fill="blue")+
+  labs(title = "Density Histogram of NCF Terminal Value", 
+       caption = "",
+       y = "Density", x = "")+geom_vline(xintercept=mean(gbm$ncfcall_hedgestrat), color="red")+xlim(-10,90 )
+```
+
+
+
+
+## Case when WCW is  uncertain
+- Generally, Uncertain WCW => Higher volatility => Higher Risk => Higher cost for hedging
+
+
+
+
+##
+
+- Before hedging:
+```{r,echo=FALSE}
+#STIMUL WCW------------------------------------------------------------
+set.seed(9876)
+S0 <- WCW_23
+drift <-  r
+sigma <-0.41# implied.vol
+T <-  T2expiry
+periods <-  round(252 * T, 0)
+simulations <-  10000
+dt <-  T / periods
+
+m_wcw <- replicate(simulations, 
+               RTL::simGBM(S0,drift,sigma,T2M = T,dt))
+
+
+```
+
+
+```{r,echo=FALSE, warning=FALSE,echo=FALSE}
+#PUTTING THE STIMUL WTI AND WCW IN ONE TABLE-----------------------------------
+m <- as_tibble(m) %>% 
+  dplyr::mutate(date = seq(from = Sys.Date(), by = "day", length.out = periods)) 
+colnames(m) <- c((c(1:simulations)),"date")
+
+m_wcw <- as_tibble(m_wcw) %>% 
+  dplyr::mutate(date = seq(from = Sys.Date(), by = "day", length.out = periods)) 
+colnames(m_wcw) <- c((c(1:simulations)),"date")
+
+
+gbm <- m[nrow(m),] %>% 
+  tidyr::pivot_longer(-date,"series","wti")
+
+gbm_wcw <- m_wcw[nrow(m_wcw),] %>% 
+  tidyr::pivot_longer(-date,"series","wcw")
+
+
+gbm_wti_wcw <- merge(gbm,gbm_wcw, by = c("series","date"))
+
+# CALC NCF IN CASE OF UNCERTAIN WCW------------------------------------
+
+gbm<-gbm_wti_wcw %>% mutate(ncfbef_wti_wcs=(gbm_wti_wcw$value.x + gbm_wti_wcw$value.y) - (gbm_wti_wcw$value.x+CC5_23)*.3 - 10) 
+
+#PLOTTING NCFFOR UNCERTAIN WCW-------------------------------------------------
+gbm %>% ggplot(aes(x = ncfbef_wti_wcs)) + 
+geom_histogram(aes(y = stat(count / sum(count))),bins = 100,col="blue",fill="blue")+
+  labs(title = "Density Histogram of NCF Terminal Value", 
+       caption = "",
+       subtitle = "NCF under $12 before the hedge is : 8.16 %",
+       y = "Density", x = "")+
+       geom_vline(xintercept=mean(gbm$ncfbef_wti_wcs), color="red")#+xlim(-20,20 )
+```
+
+```{r,echo=FALSE}
+
+# PERCENTAGE FOR UNCERTAIN WCW--------------------------------------------
+# Uncertain WCW> higher volatility> higher risk>higher cost to hedge
+percentage_values_12_hw <- subset(gbm$ncfbef_wti_wcs, gbm$ncfbef_wti_wcs < 12)
+length(percentage_values_12_hw)/10000*100
+```
+## 
+
+
+ - After hedging 
+
+
+```{r,echo=FALSE}
+# NCF IN CASE OF UNCERTAIN WCW (AFTER HEDGE)---------------------------------
+gbm<-gbm_wti_wcw %>% mutate(ncfbef_wti_wcs_hedge=(0.48*((gbm_wti_wcw$value.x + gbm_wti_wcw$value.y) - (gbm_wti_wcw$value.x+CC5_23)*.3 - 10-price_opt_36 + putreturn+price_opt_call-callreturn2) +0.2*((gbm_wti_wcw$value.x + gbm_wti_wcw$value.y) - (gbm_wti_wcw$value.x+CC5_23)*.3 - 10)+0.32*((fut + gbm_wti_wcw$value.y) - (gbm_wti_wcw$value.x+CC5_23)*.3 - 10))) 
+
+#PLOTTING NCF - UNCERATIN WCW- (AFTER HEDGE)----------------------------------
+gbm %>% ggplot(aes(x = ncfbef_wti_wcs_hedge)) + 
+geom_histogram(aes(y = stat(count / sum(count))),bins = 100,col="blue",fill="blue")+
+  labs(title = "Density Histogram of NCF Terminal Value after the Hedge", 
+       caption = "",
+       subtitle="NCF under $12 using hedge is : 0.85 %",
+       y = "Density", x = "")+
+       geom_vline(xintercept=mean(gbm$ncfbef_wti_wcs_hedge), color="red")#+xlim(-20,20 )
+```
+```{r,echo=FALSE}
+# PERCENTAGE AFTER HEDGE- UNCERTAIN WCW-----------------------------------------
+percentage_values_12_hwcs <- subset(gbm$ncfbef_wti_wcs_hedge, gbm$ncfbef_wti_wcs_hedge < 12)
+#length(percentage_values_12_hwcs)/10000*100
+```
+## The MTM gain/loss
+- The MTM hedged gain as of 27 April 2021 for our suggested strategy is $1.79 per barrel
+
+```{r,echo=FALSE}
+#HEDGE MTM GAIN/LOSS ON 27th April 2021
+optexpiry1<- as.Date("2021-06-18")
+
+fut1.date <- as.Date("2021-04-27")
+T2expiry_new<- as.numeric(optexpiry1-fut1.date)/365#
+c1 <- Black76Option("c",50,78,T2expiry_new,.0025,.15)@price
+p1 <- Black76Option("p",50,36,T2expiry_new,.0025,.15)@price
+
+per_hzcc<- 0.48 #% #hedged using costless collar
+per_hs<-   0.32 #% #hedged using swaps
+MTM<- per_hzcc*((price_opt_call-c1)-(price_opt_36-p1))+ per_hs*(55.57-50)
+
+
+#view(MTM1)
+```
+
+```{r,echo=FALSE}
+#CALCULATION OF MTM GAIN/LOSS- DIFFERENT WAY- (FULL NCF ON 23rd Mar- FULL NCF on 27th Apr)
+a<- (0.48*((50 + WCW_23) - (50+CC5_23)*.3 - 10 ))+(0.32*(57.57 +  WCW_23 - (50+CC5_23)*.3 - 10)) + (0.2*((50 + WCW_23) -(50+CC5_23)*.3 - 10))
+b<-  (0.48*((57.57+ WCW_23) - (57.57+CC5_23)*.3 - 10 +0.01   ))+(0.32*(57.57 +  WCW_23 - (57.57+CC5_23)*.3 - 10))+ (0.2*((57.57+ WCW_23) -(57.57+CC5_23)*.3 - 10))
+
+#paste(b-a,"is our gain per barrel")
+
+```
+
+
+
+
+```{r,echo=FALSE}
+# SENSITIVITY ANALYSIS FOR A FULLY HEDGED PROFILE 
+#MN: use to explain why didn't go for fully hedged prod: because with fully hedged the avg netback is around $20, and we were able to achieve that same avg netback using mixed strategy. Therefore, less cost same avg.
+gbm <- m[nrow(m),] %>% 
+  tidyr::pivot_longer(-date,"series","value")
+
+changes_percent <- seq(0, 1, 0.01)
+original <- mean(gbm$value)
+sensitivity_percent <- data.frame(Collar.Weight=changes_percent, Swap.Weight=(1-changes_percent), Avg_NCF = rep(NA, 101),  Cost = rep(NA,101), Probability = rep(NA,101))
+
+for (i in 1:101){
+  NCF <- sensitivity_percent$Collar.Weight[i]*((gbm$value + WCW_23) - (gbm$value+CC5_23)*.3 - 10 -price_opt_36*exp(r*T2expiry) +   putreturn+price_opt_call*exp(r*T2expiry)-callreturn2) +(1-sensitivity_percent$Collar.Weight[i])*(fut +  WCW_23 - (gbm$value+CC5_23)*.3 - 10)
+  NCF <- sort(NCF)
+  CVaR_0.9 <- NCF[1:1000]
+  CVaR_0.1 <- NCF[9001:10000]
+  CVaR_0.95 <- NCF[1:500]
+  CVaR_0.05 <- NCF[9501:10000]
+  sensitivity_percent$Avg_NCF[i] <- mean(NCF)
+  
+  sensitivity_percent$Cost[i] <- (1.3-0.35)*sensitivity_percent$Collar.Weight[i]
+  sensitivity_percent$Probability[i] <- sum(NCF < 12)/10000
+}
+
+
+```
+
+## SENSITIVITY ANALYSIS FOR A FULLY HEDGED PROFILE
+
+
+```{r, echo=F,results='asis',error=F,warning=F}
+library('knitr')
+kable(head(sensitivity_percent,5), format = "markdown")
+```
+
+```{r}
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+## Thank You
